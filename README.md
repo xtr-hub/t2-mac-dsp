@@ -80,35 +80,47 @@ back — so overall level is necessarily lower than pass-through.** The official
 `graph.json` uses `gain = 0.92` and applies no compensation, so the stock
 result is quiet.
 
-`install.sh` defaults to a convolver gain of **3.0** (≈ +10 dB) to compensate.
+`install.sh` defaults to a convolver gain of **4.0** (≈ +12.7 dB) to compensate.
 This is a fixed gain: it scales the signal without altering the frequency
 response, and the limiter stages still protect the drivers.
 
 | Gain | Approx. | When |
 |---|---|---|
 | 2.0 | +6.7 dB | too loud |
-| **3.0** | **+10.3 dB** | **default** |
-| 4.0 | +12.7 dB | still too quiet |
+| 3.0 | +10.3 dB | conservative |
+| **4.0** | **+12.7 dB** | **default** |
 | 5.0 | +14.7 dB | near the limit; dynamics get flattened |
+
+> ⚠️ **This deviates from upstream.** The official `graph.json` uses
+> `gain = 0.92`, which is 12.7 dB below this project's default. The extra gain
+> makes up for the level lost to peak-cutting FIR correction, at the cost of
+> the limiter engaging earlier and dynamics being compressed. Sustained loud
+> playback puts more stress on the drivers.
 
 ### Volume curve
 
-The stock config also has a very steep `cubic` volume mapping:
+The stock config maps volume into the DSP with a very steep `cubic` curve,
+so anything below half scale is effectively silent. `gen-conf.py` switches it
+to `linear` and pulls the floor from −42.5 dB up to −36 dB, which tracks the
+**standard audio taper** (PipeWire/PulseAudio's `cubic`, i.e. amplitude =
+volume³, giving −18 dB at 50%):
 
-| Sink volume | Internal gain |
-|---|---|
-| 100% | 0 dB |
-| 75% | **−25 dB** |
-| 50% | **−37 dB** |
+| Slider | Standard taper | This project | Delta |
+|---|---|---|---|
+| 100% | 0 dB | 0 dB | — |
+| 75% | −7.5 dB | −9.0 dB | −1.5 |
+| **50%** | **−18.1 dB** | **−18.0 dB** | **+0.1** |
+| 25% | −36.1 dB | −27.0 dB | +9.1 |
 
-Anything below full scale therefore sounds broken. `gen-conf.py` replaces it
-with `linear` (same endpoints, far gentler in between) and raises
-`state.default-volume` from 0.75 to 1.0, so a fresh install starts at full volume.
+**From 50% upward it matches almost exactly.** Below ~25% it runs a little
+louder than the standard taper — an inherent limitation, since
+`capture.volumes` only offers `linear`/`cubic` scaling and cannot reproduce
+the taper exactly.
 
 Note that WirePlumber **persists** the volume in
 `~/.local/state/wireplumber/`. If you spend a while poking at `wpctl set-volume`,
 the runtime value can end up somewhere odd — a restart resets it to the
-configured default.
+configured default (`state.default-volume`, set to 1.0 here).
 
 Change the gain via `./install.sh 4.0`, or edit `gain` in the config and restart:
 
@@ -126,7 +138,8 @@ All four drivers are working.
 
 **Do the volume keys still work?**
 
-Yes. The volume curve is left at the official design (`capture.volumes` untouched).
+Yes. The curve has been adjusted to track the standard audio taper — see
+"Volume curve" above.
 
 **How is this different from EasyEffects?**
 

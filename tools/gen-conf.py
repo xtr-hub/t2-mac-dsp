@@ -19,24 +19,27 @@ Usage:
     <model_dir>     e.g. 15_4 (MacBookPro15,4), 16_1, ...
                     corresponds to /usr/share/t2linux-audio/<model_dir>/
     output_file     defaults to ./50-t2-dsp.conf
-    convolver_gain  defaults to 3.0 (see below)
+    convolver_gain  defaults to 4.0 (see below)
 
 About the convolver gain:
     FIR correction is predominantly peak-cutting, and the removed energy does
     not come back — so overall level necessarily drops. The official graph.json
     uses gain=0.92 and applies no compensation, which is why the stock result
-    sounds quiet. We default to 3.0 (about +10 dB) as compensation.
+    sounds quiet. We default to 4.0 (about +12.7 dB) as compensation.
 
     A fixed gain only scales the signal, it does NOT alter the frequency
     response, and the downstream limiter stages still protect the drivers.
-    Tune to taste: 2.0 ~ +6.7dB, 4.0 ~ +12.7dB, 5.0 ~ +14.7dB.
+    Tune to taste: 2.0 ~ +6.7dB, 3.0 ~ +10.3dB, 4.0 ~ +12.7dB, 5.0 ~ +14.7dB.
+
+    Note this is +12.7 dB above upstream's value — a deliberate deviation, not
+    an upstream-validated setting. See RISKS in README.
 """
 import json
 import os
 import sys
 
 DEFAULT_MODEL = "15_4"
-DEFAULT_GAIN = 3.0
+DEFAULT_GAIN = 4.0
 SRC_DIR = "/usr/share/t2linux-audio"
 
 
@@ -95,13 +98,26 @@ def build(model, gain):
     capture = dict(d["capture.props"])
     capture["state.default-volume"] = 1.0
 
-    # Flatten the volume curve. The stock "cubic" mapping is very steep:
-    #   100% -> 0 dB, 75% -> -25 dB, 50% -> -37 dB
-    # which makes everything below full scale sound broken. "linear" keeps the
-    # same endpoints but is far less punishing in between.
+    # Rewrite the volume curve to approximate the standard audio taper.
+    #
+    # PipeWire/PulseAudio use amplitude = volume^3 (see alsa.volume-method
+    # "cubic" in /usr/share/pipewire/client.conf), which is -18 dB at 50%.
+    # capture.volumes only offers linear/cubic scaling across a [min,max] dB
+    # range, so it cannot reproduce that exactly. A linear mapping with
+    # min = -36 dB tracks it closely from 50% upward:
+    #
+    #   slider   standard cubic   this config
+    #    100%          0 dB           0 dB
+    #     75%       -7.5 dB        -9.0 dB
+    #     50%      -18.1 dB       -18.0 dB   <- matches
+    #     25%      -36.1 dB       -27.0 dB   <- low end is shallower
+    #
+    # The stock -42.5 dB wastes much of the slider on inaudible levels
+    # (50% mapped to -21 dB), which reads as "the bottom half does nothing".
     for v in d["filter.graph"].get("capture.volumes", []):
         if v.get("scale") == "cubic":
             v["scale"] = "linear"
+        v["min"] = -36.0
 
     # Gain compensation on the convolvers
     for n in d["filter.graph"]["nodes"]:

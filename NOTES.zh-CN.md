@@ -124,7 +124,10 @@ alsa_output.pci-...HiFi__Speaker__sink.split          Stream/.../Internal       
 **不要把 `hw_` 节点改名**——UCM loopback 的 `.split` 流 `target.object`
 硬编码指向它，改名会打断 UCM 链路。
 
-**`capture.volumes` 的 cubic 曲线很陡**：
+**`capture.volumes` 要小心对待。** 它把音量控制接力给 DSP 内部的响度补偿器，
+即把滑块位置映射到一段 `[min, max]` dB 区间。三点是踩出来的：
+
+*官方曲线很陡。* 原配 `min = -42.5, scale = "cubic"` 时：
 
 ```
 sink 音量 100% -> 内部   0 dB
@@ -132,8 +135,28 @@ sink 音量  75% -> 内部 -25 dB
 sink 音量  50% -> 内部 -37 dB
 ```
 
-这是官方设计（把音量控制接力给响度补偿器）。**不要改 `min`**——改成 0 会让
-映射区间变成 `[0,0]`，音量锁死在最大且无法调节。要么原样保留，要么整块移除。
+滑块一半的行程听不出变化。
+
+*绝对不要设 `min = 0`。* 那会让映射区间塌缩成 `[0, 0]`，音量锁死在最大值
+且无法调节——滑块还在动，但什么都不会变。
+
+*要贴合标准曲线，得用 `linear` + `min = -36`。* PipeWire/PulseAudio 用的是
+amplitude = volume³（见 `/usr/share/pipewire/client.conf` 里的
+`alsa.volume-method = cubic`），即 50% 对应 −18 dB。`capture.volumes` 只支持
+`linear`/`cubic` 两种 scale 作用在 dB 区间上，无法精确复现，但
+`linear` + `min = -36` 从 50% 往上贴得很近：
+
+```
+滑块     标准曲线       linear, min=-36
+ 100%        0 dB           0 dB
+  75%     -7.5 dB        -9.0 dB
+  50%    -18.1 dB       -18.0 dB    <- 吻合
+  25%    -36.1 dB       -27.0 dB    <- 低区偏响
+```
+
+另外：**WirePlumber 会持久化运行时音量**（存在 `~/.local/state/wireplumber/`）。
+调试期间用 `wpctl set-volume` 设过的值，重启服务也不会丢——**完整重启**才会
+回到配置里的 `state.default-volume`。
 
 **`target.object` 反而是绊脚石**：PipeWire 的 filter-chain 在模块加载瞬间
 匹配不到目标就放弃（`defined target not found`），而那时目标节点可能还没建好。

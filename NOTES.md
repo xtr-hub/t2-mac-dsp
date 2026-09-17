@@ -133,7 +133,11 @@ alsa_output.pci-...HiFi__Speaker__sink.split    Stream/.../Internal       ← it
 **Do not rename the `hw_` node** — the UCM loopback's `.split` stream has a
 hard-coded `target.object` pointing at it; renaming it breaks the UCM link.
 
-**`capture.volumes` uses a very steep cubic curve**:
+**`capture.volumes` needs care.** It hands volume control off to the DSP's
+loudness compensator, mapping slider position onto a `[min, max]` dB range.
+Three things learned the hard way:
+
+*The stock curve is steep.* With the shipped `min = -42.5, scale = "cubic"`:
 
 ```
 sink volume 100% -> internal   0 dB
@@ -141,10 +145,30 @@ sink volume  75% -> internal -25 dB
 sink volume  50% -> internal -37 dB
 ```
 
-This is by design (volume control is handed off to the loudness compensator).
-**Do not change `min`** — setting it to 0 collapses the mapping range to
-`[0,0]`, making the volume stuck at maximum and unadjustable. Either keep it
-as shipped or remove the block entirely.
+Half the slider does nothing audible.
+
+*Never set `min = 0`.* It collapses the mapping range to `[0, 0]`, which pins
+the volume at maximum and makes it unadjustable — the slider still moves but
+nothing changes.
+
+*Matching the standard taper needs `linear` + `min = -36`.* PipeWire/PulseAudio
+use amplitude = volume³ (see `alsa.volume-method = cubic` in
+`/usr/share/pipewire/client.conf`), i.e. −18 dB at 50%. `capture.volumes` only
+offers `linear`/`cubic` scaling over a dB range, so it cannot reproduce that
+exactly — but a linear mapping with `min = -36` tracks it closely from 50% up:
+
+```
+slider   standard taper   linear, min=-36
+ 100%          0 dB           0 dB
+  75%       -7.5 dB        -9.0 dB
+  50%      -18.1 dB       -18.0 dB    <- matches
+  25%      -36.1 dB       -27.0 dB    <- low end runs louder
+```
+
+Also relevant: **WirePlumber persists the runtime volume** under
+`~/.local/state/wireplumber/`. While tuning, `wpctl set-volume` leaves values
+behind that survive a service restart — a full restart resets to
+`state.default-volume` from the config.
 
 **`target.object` is counterproductive.** PipeWire's filter-chain gives up if
 the target cannot be matched at module load time (`defined target not found`),
