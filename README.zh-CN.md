@@ -75,8 +75,7 @@ ls /usr/share/t2linux-audio/          # 已安装哪些机型的数据
 | `pipewire-module-filter-chain-lv2` | — | DSP 图使用的 LV2 后端 |
 | `lsp-plugins-lv2` | ≥ 1.2.13 | 压缩器、响度补偿 |
 | `lv2-bankstown` | ≥ 1.1.0 | 虚拟低音 |
-| `lv2-triforce` | ≥ 0.2.0 | — |
-| `lv2-swh-plugins` | — | — |
+| `lv2-triforce` | ≥ 0.2.0 | 供 `mic.json` 使用 |
 | `t2linux-audio` | ≥ 2.1.0 | **提供 FIR 数据与 `graph.json`** |
 
 上述插件都是 `t2linux-audio` 的依赖，所以通常装上它一个就够了。核对：
@@ -85,7 +84,9 @@ ls /usr/share/t2linux-audio/          # 已安装哪些机型的数据
 rpm -q --requires t2linux-audio
 ```
 
-`install.sh` 在动手前会检查这些，缺什么会直接告诉你。
+`install.sh` 会检查**所有 DSP 图实际引用到的插件**，缺什么会直接告诉你，
+并给出对应包管理器的安装命令。（注：`lv2-swh-plugins` 虽然被上游列为依赖，
+但十个机型的图里一次都没引用，因此不检查。）
 
 ### 实测环境
 

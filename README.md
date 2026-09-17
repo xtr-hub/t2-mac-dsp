@@ -75,8 +75,7 @@ ls /usr/share/t2linux-audio/          # which model dirs are installed
 | `pipewire-module-filter-chain-lv2` | — | LV2 backend used by the DSP graph |
 | `lsp-plugins-lv2` | ≥ 1.2.13 | Compressors, loudness compensation |
 | `lv2-bankstown` | ≥ 1.1.0 | Virtual bass |
-| `lv2-triforce` | ≥ 0.2.0 | — |
-| `lv2-swh-plugins` | — | — |
+| `lv2-triforce` | ≥ 0.2.0 | Used by `mic.json` |
 | `t2linux-audio` | ≥ 2.1.0 | **Ships the FIR data and `graph.json`** |
 
 All of the plugin packages come in as dependencies of `t2linux-audio`, so
@@ -86,7 +85,10 @@ installing that one package is normally enough. Verify:
 rpm -q --requires t2linux-audio
 ```
 
-`install.sh` checks these before doing anything and tells you what is missing.
+`install.sh` checks the ones that are actually referenced by the DSP graphs
+and tells you what is missing, with the install command for your package
+manager. (Note `lv2-swh-plugins` is listed as a dependency upstream but is not
+referenced by any of the ten models' graphs, so it is not checked.)
 
 ### Tested on
 
