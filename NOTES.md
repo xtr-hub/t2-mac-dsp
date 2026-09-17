@@ -1,5 +1,7 @@
 # Debugging notes — the five Fedora packaging bugs
 
+**Language: English | [简体中文](NOTES.zh-CN.md)**
+
 Investigated: 2026-09-17 · Machine: MacBookPro15,4 (13" 2019, i5-8257U)
 Environment: Fedora 44 + t2linux kernel 7.1.9 · PipeWire 1.6.8 · WirePlumber 0.5.14
 

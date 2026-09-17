@@ -1,5 +1,7 @@
 # t2-mac-dsp — Per-driver speaker DSP for Apple T2 MacBooks
 
+**Language: English | [简体中文](README.zh-CN.md)**
+
 Enable **per-driver speaker correction** on Apple T2 MacBooks under Linux,
 reproducing the "multi-driver crossover + driver protection" chain that macOS
 runs natively.
