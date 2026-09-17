@@ -10,12 +10,15 @@
 ## 结论先行
 
 Fedora 的 `t2linux-audio` 包**已经提供了完整的 DSP 数据与配置**，但在 T2 机器上
-**从未生效过**——因为打包和上游代码里埋了 5 处缺陷。本文记录它们，以便：
+**从未生效过**——因为打包方式上存在 3 处缺陷。本文记录它们，以便：
 
 - 判断上游是否已修复（对照检查）
 - 在别的机器上复现时快速定位
 
-## 五个缺陷
+**只有缺陷 1、2、5 经确认**，下方各附可复现的证据。缺陷 3、4 留档但明确标注为
+*已撤回* / *未确认*——它们调试期间被怀疑过，但没通过验证。**不要上报这两条。**
+
+## 已确认的缺陷
 
 ### 1. udev 规则装在了不被扫描的目录
 
@@ -45,7 +48,7 @@ ALSA 的 card id 上限是 **15 字符**，会被截断，导致**永远匹配�
 lemmyg 上游版（`t2-apple-audio-dsp`）用短名 `t2-15_4` 正是为绕开此坑，注释里
 写明了原因。**Fedora 打包版没绕。**
 
-### 3. WirePlumber `software-dsp.rules` 读取存在竞态
+### 3. WirePlumber `software-dsp.rules` —— 未确认，不予上报
 
 `/usr/share/wireplumber/scripts/node/software-dsp.lua` 第 11 行在脚本加载时
 一次性读取配置：
@@ -56,17 +59,25 @@ config.rules = Conf.get_section_as_json("node.software-dsp.rules", Json.Array{})
 
 若此时 conf.d 尚未合并完，读到空数组，后续 `match_rules` 永远匹配不到东西。
 
-**实测证据**：同一份配置，22:04–22:07 匹配成功 7 次（`DSP rule found`），
-之后**每一个实例都是 0 次**。
+**为什么不报**：当时的观察是"某个时间窗内匹配 7 次，之后 0 次"——但那是
+在反复手改配置的调试过程中记录的。**我们自己留下一份陈旧或残缺的配置，
+会产生一模一样的症状**，所以没有干净复现之前，不能归因于上游。
+此处仅作开放问题留存，不作为结论。
 
-### 4. `find-defined-target.lua` 的 target 匹配
+### 4. `find-defined-target.lua` —— 已撤回，不是 bug
 
-同名脚本中，以**字符串**形式给出的 `target.object` 走的是按 `node.name` 匹配的
-分支，与缺陷 3 叠加时无法可靠解析。
+一度认为这是缺陷：第 88 行传给 `canLink` 的像是循环外的变量。核对包内文件后
+被推翻：
 
-> **更正**：这一点在排查中一度被误判。本机（`wireplumber 0.5.14-1.fc44`）
-> 第 88 行实际是 `lutils.canLink (si_props, lnkbl)`，与 RPM 包内一致，
-> **并非 bug**。报告前务必以包内文件为准核对。
+```bash
+rpm -ql wireplumber | grep find-defined-target     # 文件位置
+# wireplumber 0.5.14-1.fc44 第 88 行：
+#   lutils.canLink (si_props, lnkbl) then         <- 与 RPM 完全一致
+```
+
+**包内文件是正确的。** 保留此条只为记住教训：排查早期读到的一行被记成了
+`target`，还据此给系统文件打了补丁。**务必以随包发布的文件为准核对，
+用 `rpm -V` / SHA256 而不是记忆。**
 
 ### 5. `graph.json` 里 FIR 路径多一个连字符 ⚠️
 

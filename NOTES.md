@@ -8,13 +8,18 @@ Environment: Fedora 44 + t2linux kernel 7.1.9 · PipeWire 1.6.8 · WirePlumber 0
 ## TL;DR
 
 Fedora's `t2linux-audio` package **already ships the complete DSP data and
-config**, but on T2 hardware **it has never worked** — because of five defects
-spread across packaging and upstream code.
+config**, but on T2 hardware **it has never worked** — because of three defects
+in how the package is put together.
 
 This file documents them so you can (a) check whether upstream has fixed them,
 and (b) find the culprit quickly when reproducing on another machine.
 
-## The five defects
+**Only defects 1, 2 and 5 are confirmed**, each with reproducible evidence
+below. Defects 3 and 4 are kept for the record but are explicitly *retracted*
+or *unconfirmed* — they were suspected during debugging and did not survive
+verification. Do not report them upstream.
+
+## The confirmed defects
 
 ### 1. udev rule installed into a directory udev never scans
 
@@ -49,7 +54,7 @@ The upstream project (`lemmyg/t2-apple-audio-dsp`) uses the short id `t2-15_4`
 precisely to dodge this, and its rule file says so in a comment.
 **The Fedora package does not.**
 
-### 3. WirePlumber `software-dsp.rules` read races with config loading
+### 3. WirePlumber `software-dsp.rules` — NOT CONFIRMED, do not report
 
 `/usr/share/wireplumber/scripts/node/software-dsp.lua` reads its config once,
 at script load time:
@@ -58,22 +63,32 @@ at script load time:
 config.rules = Conf.get_section_as_json("node.software-dsp.rules", Json.Array{})
 ```
 
-If conf.d has not been merged yet at that moment, it gets an empty array and
-`match_rules` will never match anything.
+If conf.d has not been merged yet at that moment, it would get an empty array
+and `match_rules` would never match anything.
 
-**Observed**: with an identical config, the rule matched 7 times between
-22:04–22:07 (`DSP rule found`), then **0 times in every subsequent instance**.
+**Why this is not being reported**: the observation was "the rule matched 7
+times in one window, then 0 times afterwards" — but that was recorded while
+the config files were being rewritten repeatedly by hand during debugging.
+**A stale or malformed config of our own produces the same symptom**, so this
+cannot be attributed to upstream without a clean reproduction. Left here as an
+open question, not a finding.
 
-### 4. `find-defined-target.lua` target matching
+### 4. `find-defined-target.lua` — RETRACTED, it is not a bug
 
-In the same script, `target.object` given as a *string* goes through a loop
-that matches on `node.name`. Combined with defect 3, `target.object` reliably
-fails to resolve.
+This was initially believed to be a defect: line 88 passes what looked like a
+loop-external variable to `canLink`. Verifying against the packaged file
+disproves it:
 
-> Note: this was misdiagnosed during the investigation. On this machine
-> (`wireplumber 0.5.14-1.fc44`) line 88 reads `lutils.canLink (si_props, lnkbl)`,
-> which matches the RPM — i.e. it is *not* a bug there. **Always verify against
-> the packaged file before reporting.**
+```bash
+rpm -ql wireplumber | grep find-defined-target     # location
+# wireplumber 0.5.14-1.fc44, line 88:
+#   lutils.canLink (si_props, lnkbl) then         <- matches the RPM exactly
+```
+
+**The packaged file is correct.** This entry is kept only as a reminder of how
+the mistake happened: a line read early in the investigation was misremembered
+as `target`, and a "fix" was applied to a system file on that basis. **Always
+re-check against the shipped file, and prefer `rpm -V` / SHA256 over memory.**
 
 ### 5. FIR paths in `graph.json` contain an extra hyphen ⚠️
 
