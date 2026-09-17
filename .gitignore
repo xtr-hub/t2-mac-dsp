@@ -1,0 +1,10 @@
+# 生成的配置（install.sh 会按本机机型重新生成）
+/50-t2-dsp.conf
+*.conf.bak
+
+# 编辑器 / 系统
+*~
+.DS_Store
+*.swp
+__pycache__/
+*.pyc
