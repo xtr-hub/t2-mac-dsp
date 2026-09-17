@@ -1,141 +1,151 @@
-# t2-mac-dsp —— T2 MacBook 内置扬声器 DSP
+# t2-mac-dsp — Per-driver speaker DSP for Apple T2 MacBooks
 
-在 Linux 上为 Apple T2 MacBook 启用**四扬声器独立校正**，复现 macOS 那套
-"多单元分频 + 单元保护"的效果。
+Enable **per-driver speaker correction** on Apple T2 MacBooks under Linux,
+reproducing the "multi-driver crossover + driver protection" chain that macOS
+runs natively.
 
-## 这是什么
+## What this is
 
-Apple 在 macOS 里用私有 DSP 对内置扬声器做**逐单元**处理：每个扬声器单元
-各有一路 FIR 校正曲线、独立的压缩器和限幅器。Linux 下的 `t2bce_audio`
-驱动是**直通**——把信号原封不动丢给单元，所以听起来"差好多"（低频薄、
-中高频发刺）。
+macOS drives the built-in speakers through a private DSP that processes **each
+driver individually**: every driver gets its own FIR correction curve plus
+independent compressor and limiter stages. On Linux, the `t2bce_audio` driver
+is a **pass-through** — it hands the signal straight to the drivers, which is
+why the speakers sound distinctly worse (thin bass, harsh upper-mids).
 
-Asahi Linux 团队测量了各机型的扬声器频响，生成 FIR 校正数据，T2 官方团队
-把它整理进了 `t2linux-audio` 包。**数据 Fedora 已经装好了，只是没能生效**
-（原因见 [NOTES.md](NOTES.md)）。
+The Asahi Linux team measured the speakers of each model and generated FIR
+correction data; the T2 Linux team packaged it into `t2linux-audio`.
+**Fedora already ships the data — it just never worked** (see [NOTES.md](NOTES.md)).
 
-本项目把这些数据接到 **PipeWire 原生 filter-chain** 上，绕开有问题的
-WirePlumber `software-dsp` 路径。
+This project wires that data into a **native PipeWire `filter-chain`**,
+bypassing the broken WirePlumber `software-dsp` path entirely.
 
-## 处理链
+## Signal chain
 
 ```
-应用 (立体声)
+Application (stereo)
    ↓
-DSP Sink  "MacBook Pro xx,x DSP Speakers"
+DSP sink   "MacBook Pro xx,x DSP Speakers"
    ↓
-bankstown 虚拟低音        ← 心理声学低频，不硬推单元
+bankstown virtual bass        ← psychoacoustic bass, no driver excursion
    ↓
-响度补偿 (loud_comp)
+Loudness compensation (loud_comp)
    ↓
-四路 FIR 卷积            ← 前 L/R + 后 L/R，各用独立校正曲线
+4x FIR convolution            ← front L/R + rear L/R, independent curves
    ↓
-分频压缩 → 独立限幅       ← 每对单元一组，防过载
+Crossover compression → per-pair limiting
    ↓
-4 声道输出 (AUX0-3)
+4-channel output (AUX0-3)
    ↓
-硬件 (四个扬声器单元)
+Hardware (four drivers)
 ```
 
-## 支持机型
+## Supported models
 
-有 DSP 数据的机型（`/usr/share/t2linux-audio/<目录>/`）：
+Models with DSP data in `/usr/share/t2linux-audio/<dir>/`:
 
-| 目录 | 机型 |
+| Directory | Model |
 |---|---|
 | `8_1` `8_2` `9_1` | MacBookAir8,1 / 8,2 / 9,1 |
 | `15_1` `15_2` `15_4` | MacBookPro15,1 / 15,2 / 15,4 |
 | `16_1` `16_2` `16_3` `16_4` | MacBookPro16,1 / 16,2 / 16,3 / 16,4 |
 
-查看本机型号：`cat /sys/class/dmi/id/product_name`
+Check yours: `cat /sys/class/dmi/id/product_name`
 
-## 安装
+## Install
 
 ```bash
-./install.sh              # 默认卷积器增益 3.0
-./install.sh 4.0          # 音量不够时加大
+./install.sh              # default convolver gain 3.0
+./install.sh 4.0          # louder
 ```
 
-**完全用户级，不需要 root**——只写 `~/.config/pipewire/`。
+**Entirely user-level — no root required.** Writes only under `~/.config/pipewire/`.
 
-脚本会：检测机型 → 从官方 `graph.json` 生成配置 → 装到
-`~/.config/pipewire/pipewire.conf.d/` → 重启音频栈 → 验证。
+The script detects your model, generates the config from the official
+`graph.json`, installs it, restarts the audio stack and verifies the result.
 
-## 卸载
+## Uninstall
 
 ```bash
 ./uninstall.sh
 ```
 
-删掉配置文件并重启音频栈，恢复直通。
+Removes the config, restarts the audio stack, returns to pass-through.
 
-## 音量
+## Volume
 
-**FIR 校正以"削峰"为主，削掉的能量不会回来，所以整体电平必然低于直通。**
-官方 `graph.json` 的 `gain = 0.92` 没有补偿这个损失，直接用的结果是音量偏小。
+**FIR correction is mostly peak-cutting, and the removed energy does not come
+back — so overall level is necessarily lower than pass-through.** The official
+`graph.json` uses `gain = 0.92` and applies no compensation, so the stock
+result is quiet.
 
-`install.sh` 默认把卷积器增益设为 **3.0**（约 +10 dB）作补偿。固定增益只整体
-放大，**不改变频响形状**，且后面有限幅器兜底。
+`install.sh` defaults to a convolver gain of **3.0** (≈ +10 dB) to compensate.
+This is a fixed gain: it scales the signal without altering the frequency
+response, and the limiter stages still protect the drivers.
 
-| 增益 | 约合 | 适用 |
+| Gain | Approx. | When |
 |---|---|---|
-| 2.0 | +6.7 dB | 嫌吵 |
-| **3.0** | **+10.3 dB** | **默认** |
-| 4.0 | +12.7 dB | 还嫌小 |
-| 5.0 | +14.7 dB | 上限附近，动态会被压平 |
+| 2.0 | +6.7 dB | too loud |
+| **3.0** | **+10.3 dB** | **default** |
+| 4.0 | +12.7 dB | still too quiet |
+| 5.0 | +14.7 dB | near the limit; dynamics get flattened |
 
-调整：`./install.sh 4.0`，或直接改配置文件里的 `gain` 后重启音频栈：
+Change it via `./install.sh 4.0`, or edit `gain` in the config and restart:
 
 ```bash
 systemctl --user restart pipewire pipewire-pulse wireplumber
 ```
 
-## 常见疑问
+## FAQ
 
-**为什么声音设置里只显示 2 个扬声器？**
+**Why does the sound settings panel show only 2 speakers?**
 
-正常。DSP 的输入是立体声、输出才是 4 声道——**四路分频在 DSP 内部完成**，
-系统 UI 只反映送进去的那一端。四个单元确实都在工作。
+Expected. The DSP takes stereo in and produces 4 channels out — **the four-way
+split happens inside the DSP**. The system UI only reflects the input side.
+All four drivers are working.
 
-**音量键还能用吗？**
+**Do the volume keys still work?**
 
-能。音量曲线保持官方设计（`capture.volumes` 未改动）。
+Yes. The volume curve is left at the official design (`capture.volumes` untouched).
 
-**和 EasyEffects 有什么区别？**
+**How is this different from EasyEffects?**
 
-EasyEffects 是在**立体声**上做软件 EQ，分不出四个单元；本项目对**每个单元**
-独立校正。两者层次不同，同时用会打架——用了 DSP 就不需要 EasyEffects。
+EasyEffects applies software EQ to a **stereo** signal and cannot address
+individual drivers. This project corrects **each driver separately**. They
+operate at different levels and will fight each other — once DSP is active you
+don't need EasyEffects.
 
-**真的比直通好听吗？**
+**Is it actually better than pass-through?**
 
-取决于你的耳朵和机型。DSP 修的是"频响不平直"，代价是整体电平略低。
-不喜欢就 `./uninstall.sh` 回到直通。
+Depends on your ears and your model. DSP fixes uneven frequency response at the
+cost of somewhat lower overall level. If you don't like it, `./uninstall.sh`
+returns to pass-through.
 
-## 目录
+## Layout
 
 ```
 t2-mac-dsp/
-├── README.md              本文件
-├── NOTES.md               踩坑记录（Fedora 打包缺陷、调试方法）
-├── install.sh             安装
-├── uninstall.sh           卸载
+├── README.md              this file
+├── NOTES.md               the five Fedora packaging bugs + debugging notes
+├── install.sh             installer
+├── uninstall.sh           uninstaller
 ├── conf/
-│   └── 50-t2-dsp.conf     生成好的配置（参考用，install.sh 会重新生成）
+│   └── 50-t2-dsp.conf     generated config (for reference)
 └── tools/
-    └── gen-conf.py        从官方 graph.json 生成配置
+    └── gen-conf.py        generates the config from the official graph.json
 ```
 
-## 关于数据
+## About the data
 
-**本仓库不含任何音频数据。** FIR 滤波器文件和 DSP 图定义在运行时从系统包
-`t2linux-audio` 读取，本项目只提供把它们接进 PipeWire 的胶水代码。
+**This repository contains no audio data.** The FIR filter files and DSP graph
+definitions are read at runtime from the system package `t2linux-audio`; this
+project only provides the glue that wires them into PipeWire.
 
-因此本项目用 MIT 许可，不涉及上游数据的再分发。那些数据源自 Asahi Linux
-项目与 T2 Linux 团队，版权见系统上的
-`/usr/share/t2linux-audio/*/LICENSE.asahi-audio`。
+That is why MIT is sufficient here — no upstream data is redistributed. The
+data itself originates from the Asahi Linux project and the T2 Linux team;
+see `/usr/share/t2linux-audio/*/LICENSE.asahi-audio` on an installed system.
 
-## 致谢
+## Credits
 
-- **Asahi Linux** 团队 —— 扬声器频响测量与 FIR 生成
-- **T2 Linux 团队** —— `t2linux-audio` 包与 DSP 图定义
-- `chadmed` (bankstown)、`lsp-plugins` —— 用到的 LV2 插件
+- **Asahi Linux** team — speaker frequency-response measurements and FIR generation
+- **T2 Linux** team — `t2linux-audio` package and DSP graph definitions
+- `chadmed` (bankstown), `lsp-plugins` — the LV2 plugins used

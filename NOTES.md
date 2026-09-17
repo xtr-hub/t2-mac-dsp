@@ -1,171 +1,177 @@
-# 踩坑记录
+# Debugging notes — the five Fedora packaging bugs
 
-调试日期：2026-09-17 · 机型：MacBookPro15,4 (13" 2019, i5-8257U)
-环境：Fedora 44 + t2linux 内核 7.1.9 · PipeWire 1.6.8 · WirePlumber 0.5.14
+Investigated: 2026-09-17 · Machine: MacBookPro15,4 (13" 2019, i5-8257U)
+Environment: Fedora 44 + t2linux kernel 7.1.9 · PipeWire 1.6.8 · WirePlumber 0.5.14
 
-## 结论先行
+## TL;DR
 
-Fedora 的 `t2linux-audio` 包**已经提供了完整的 DSP 数据与配置**，但在 T2 机器上
-**从未生效过**——因为打包和上游代码里埋了 5 处缺陷。本文记录它们，以便：
+Fedora's `t2linux-audio` package **already ships the complete DSP data and
+config**, but on T2 hardware **it has never worked** — because of five defects
+spread across packaging and upstream code.
 
-- 判断上游是否已修复（对照检查）
-- 在别的机器上复现时快速定位
+This file documents them so you can (a) check whether upstream has fixed them,
+and (b) find the culprit quickly when reproducing on another machine.
 
-## 五个缺陷
+## The five defects
 
-### 1. udev 规则装在了不被扫描的目录
+### 1. udev rule installed into a directory udev never scans
 
 ```
-包内位置: /usr/lib64/udev/rules.d/99-t2-audio-rename.rules
-实际位置: /usr/lib/udev/rules.d/    ← udev 只读这里
+shipped at:  /usr/lib64/udev/rules.d/99-t2-audio-rename.rules
+required at: /usr/lib/udev/rules.d/
 ```
 
-udev 只扫描 `/usr/lib/udev/rules.d/`、`/etc/udev/rules.d/`、`/run/udev/rules.d/`。
-**`lib64` 那份从未被读取**，声卡 id 一直停留在 `Audio`。
+udev only scans `/usr/lib/udev/rules.d/`, `/etc/udev/rules.d/` and
+`/run/udev/rules.d/`. **The `lib64` copy is never read**, so the sound card id
+stays at `Audio` forever.
 
-对比：同项目的 `t2ncm` 包把规则正确装在 `/usr/lib/udev/rules.d/90-network-t2-ncm.rules`。
+For contrast, the sibling package `t2ncm` installs its rule correctly at
+`/usr/lib/udev/rules.d/90-network-t2-ncm.rules`.
 
-**验证**：`udevadm test /sys/class/sound/card0 2>&1 | grep t2-audio` → 无输出即未加载。
+**Verify**: `udevadm test /sys/class/sound/card0 2>&1 | grep t2-audio` — no
+output means it was never loaded.
 
-### 2. 匹配用的 card id 超过 ALSA 长度上限
+### 2. Match key exceeds ALSA's card-id length limit
 
-`/usr/share/wireplumber/wireplumber.conf.d/99-t2-audio.conf` 里：
+In `/usr/share/wireplumber/wireplumber.conf.d/99-t2-audio.conf`:
 
 ```
 { alsa.id = "t2-MacBookPro15,4", api.alsa.pcm.stream = "playback" }
-           ↑ 17 字符
+            ↑ 17 characters
 ```
 
-ALSA 的 card id 上限是 **15 字符**，会被截断，导致**永远匹配不上**。
+ALSA card ids are capped at **15 characters**, so this is truncated and the
+rule can **never match**.
 
-lemmyg 上游版（`t2-apple-audio-dsp`）用短名 `t2-15_4` 正是为绕开此坑，注释里
-写明了原因。**Fedora 打包版没绕。**
+The upstream project (`lemmyg/t2-apple-audio-dsp`) uses the short id `t2-15_4`
+precisely to dodge this, and its rule file says so in a comment.
+**The Fedora package does not.**
 
-### 3. WirePlumber `software-dsp.rules` 读取存在竞态
+### 3. WirePlumber `software-dsp.rules` read races with config loading
 
-`/usr/share/wireplumber/scripts/node/software-dsp.lua` 第 11 行在脚本加载时
-一次性读取配置：
+`/usr/share/wireplumber/scripts/node/software-dsp.lua` reads its config once,
+at script load time:
 
 ```lua
 config.rules = Conf.get_section_as_json("node.software-dsp.rules", Json.Array{})
 ```
 
-若此时 conf.d 尚未合并完，读到空数组，后续 `match_rules` 永远匹配不到东西。
+If conf.d has not been merged yet at that moment, it gets an empty array and
+`match_rules` will never match anything.
 
-**实测证据**：同一份配置，22:04–22:07 匹配成功 7 次（`DSP rule found`），
-之后**每一个实例都是 0 次**。
+**Observed**: with an identical config, the rule matched 7 times between
+22:04–22:07 (`DSP rule found`), then **0 times in every subsequent instance**.
 
-### 4. `find-defined-target.lua` 的 target 匹配
+### 4. `find-defined-target.lua` target matching
 
-同名脚本第 88 行传的是**外层恒为 nil 的 `target`**：
+In the same script, `target.object` given as a *string* goes through a loop
+that matches on `node.name`. Combined with defect 3, `target.object` reliably
+fails to resolve.
 
-```lua
-elseif target_value then
-  for lnkbl in om:iterate { type = "SiLinkable" } do
-    local target_props = lnkbl.properties
-    if (...) and
-        lutils.canLink (si_props, lnkbl) then    -- 注：本机实测此处为 lnkbl
-```
+> Note: this was misdiagnosed during the investigation. On this machine
+> (`wireplumber 0.5.14-1.fc44`) line 88 reads `lutils.canLink (si_props, lnkbl)`,
+> which matches the RPM — i.e. it is *not* a bug there. **Always verify against
+> the packaged file before reporting.**
 
-> 注：这一点在排查中一度被误判——本机 wireplumber 0.5.14-1.fc44 的 RPM 里
-> **就是 `lnkbl`**，属正常实现。但它与缺陷 3 叠加时，`node.name` 形式的
-> `target.object` 匹配仍会失败。**如需验证请以包内文件为准**。
-
-### 5. `graph.json` 里 FIR 路径多一个连字符 ⚠️
+### 5. FIR paths in `graph.json` contain an extra hyphen ⚠️
 
 ```json
 "filename": ["/usr/share/t2-linux-audio/15_4/front-48.wav", ...]
-                          ↑ 多了连字符
-实际目录:    /usr/share/t2linux-audio/15_4/
+                          ↑ extra hyphen
+actual dir:  /usr/share/t2linux-audio/15_4/
 ```
 
-**这是"完全无声"的直接原因**：Convolver 加载不到 FIR 文件，整个
-filter-chain graph 启动失败：
+**This is the direct cause of total silence.** The convolvers cannot load any
+FIR file and the whole filter-chain graph fails to start:
 
 ```
-failed file /usr/share/t2-linux-audio/15_4/front-96.wav: 没有那个文件或目录
+failed file /usr/share/t2-linux-audio/15_4/front-96.wav: No such file or directory
 spa.filter-graph: cannot create plugin instance 0 rate:48000
 pw.stream: error (-2) can't start graph
 ```
 
-**注意**：这一点即便修好前四个也无法绕开——WirePlumber 路线就算走通，
-也会撞在它上面。
+**Note**: fixing defects 1–4 does not help here — even a working WirePlumber
+path would still hit this one.
 
-## 为什么绕开 WirePlumber
+## Why bypass WirePlumber
 
-官方设计的链路是：
+The intended chain is:
 
 ```
-udev 重命名声卡 -> WirePlumber monitor.alsa.rules 改名节点
-                -> node.software-dsp.rules 按机型挂载 graph.json
+udev renames card -> WirePlumber monitor.alsa.rules renames nodes
+                  -> node.software-dsp.rules attaches graph.json per model
 ```
 
-这条链依赖缺陷 1–4 全部正常。与其逐个打补丁（且会改到系统文件），
-不如**直接使用 PipeWire 原生 `libpipewire-module-filter-chain`**：
+That chain depends on defects 1–4 all being absent. Rather than patch each one
+(and touch system files), this project talks to PipeWire's native
+`libpipewire-module-filter-chain` directly:
 
-| | WirePlumber 路线 | 直接 filter-chain |
+| | WirePlumber path | Direct filter-chain |
 |---|---|---|
-| 依赖 | software-dsp 机制 | PipeWire 原生模块 |
-| 受缺陷影响 | 1,2,3,4 | 无 |
-| 权限 | 需 root 改 `/etc`、`/usr/share` | **完全用户级** |
-| 回滚 | 多文件还原 | **删一个文件** |
+| Depends on | software-dsp machinery | native PipeWire module |
+| Affected by | defects 1,2,3,4 | none |
+| Privileges | root, writes `/etc` and `/usr/share` | **user-level only** |
+| Rollback | restore several files | **delete one file** |
 
-关键洞察：**`graph.json` 的 `filter.graph` 段落本身就是
-`libpipewire-module-filter-chain` 的参数格式**，两者只差语法
-（JSON 的 `"k": v` + 逗号 vs SPA-JSON 的 `k = v` 无逗号）。
+Key insight: **the `filter.graph` section of `graph.json` already *is* the
+argument format of `libpipewire-module-filter-chain`** — the only difference is
+syntax (JSON's `"k": v` with commas vs SPA-JSON's `k = v` without).
 
-## 其他实测要点
+## Other findings
 
-**UCM 的节点结构**：同一 ALSA 设备会产生多个节点，共享 `device.id` 与
-`api.alsa.path`：
-
-```
-alsa_output.hw_t2-15_4_0                              Audio/Sink/Internal  4ch  ← 硬件
-alsa_output.pci-...HiFi__Speaker__sink                Audio/Sink           4ch  ← UCM 虚拟
-alsa_output.pci-...HiFi__Speaker__sink.split          Stream/.../Internal       ← 其内部流
-```
-
-**不要把 `hw_` 节点改名**——UCM loopback 的 `.split` 流 `target.object`
-硬编码指向它，改名会打断 UCM 链路。
-
-**`capture.volumes` 的 cubic 曲线很陡**：
+**UCM node structure.** One ALSA device produces several nodes sharing
+`device.id` and `api.alsa.path`:
 
 ```
-sink 音量 100% -> 内部 0 dB
-sink 音量  75% -> 内部 -25 dB
-sink 音量  50% -> 内部 -37 dB
+alsa_output.hw_t2-15_4_0                        Audio/Sink/Internal  4ch  ← hardware
+alsa_output.pci-...HiFi__Speaker__sink          Audio/Sink           4ch  ← UCM virtual
+alsa_output.pci-...HiFi__Speaker__sink.split    Stream/.../Internal       ← its internal stream
 ```
 
-这是官方设计（把音量控制接力给响度补偿器）。**不要改 `min`**——改成 0 会让
-映射区间变成 `[0,0]`，音量锁死在最大且无法调节。要么原样保留，要么整块移除。
+**Do not rename the `hw_` node** — the UCM loopback's `.split` stream has a
+hard-coded `target.object` pointing at it; renaming it breaks the UCM link.
 
-**`target.object` 反而是绊脚石**：PipeWire 的 filter-chain 在模块加载瞬间
-匹配不到目标就放弃（`defined target not found`），而那时目标节点可能还没建好。
-移掉它，让 session manager 自动连接，反而可靠。
+**`capture.volumes` uses a very steep cubic curve**:
 
-## 排查用的命令
+```
+sink volume 100% -> internal   0 dB
+sink volume  75% -> internal -25 dB
+sink volume  50% -> internal -37 dB
+```
+
+This is by design (volume control is handed off to the loudness compensator).
+**Do not change `min`** — setting it to 0 collapses the mapping range to
+`[0,0]`, making the volume stuck at maximum and unadjustable. Either keep it
+as shipped or remove the block entirely.
+
+**`target.object` is counterproductive.** PipeWire's filter-chain gives up if
+the target cannot be matched at module load time (`defined target not found`),
+and the target node may not exist yet. Removing it and letting the session
+manager connect automatically is more reliable.
+
+## Useful commands
 
 ```bash
-# 配置文件是否被读取
+# was the config file read?
 journalctl --user -u pipewire -b | grep "50-t2-dsp"
 
-# graph 是否启动失败
+# did the graph fail to start?
 journalctl --user -u pipewire -b | grep -E "can't start graph|failed file"
 
-# 节点与端口
-pw-dump | python3 -c "..."     # 见 install.sh 里的用法
+# nodes and ports
+pw-dump | python3 -c "..."     # see usage in install.sh
 pw-link -l
 
-# 内部 volume 控制值
+# internal volume control values
 journalctl --user -u pipewire -b | grep "filter-graph.*volume"
 
-# 声卡 id / udev 规则是否生效
+# card id / did the udev rule take effect?
 cat /sys/class/sound/card0/id
 udevadm test /sys/class/sound/card0 2>&1 | grep t2-audio
 ```
 
-## 上游参考
+## Upstream references
 
-- `lemmyg/t2-apple-audio-dsp` —— T2 官方团队的 DSP 项目（Ubuntu 向）
-- `t2linux/wiki` audio-config 指南
-- `angelobdev/t2-easyeffects-preset` —— EasyEffects 方案（另一条路）
+- `lemmyg/t2-apple-audio-dsp` — the T2 team's DSP project (Ubuntu-oriented)
+- `t2linux/wiki` — audio-config guide
+- `angelobdev/t2-easyeffects-preset` — the EasyEffects route (the other option)
