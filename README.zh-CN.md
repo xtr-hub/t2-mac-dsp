@@ -53,6 +53,60 @@ bankstown 虚拟低音        ← 心理声学低频，不硬推单元
 
 查看本机型号：`cat /sys/class/dmi/id/product_name`
 
+## 环境要求
+
+### 硬件
+
+Apple T2 MacBook（2018–2020 年带 T2 安全芯片的 Intel 机型），且机型在上表
+中。确认方式：
+
+```bash
+cat /sys/class/dmi/id/product_name    # 例如 MacBookPro15,4
+ls /usr/share/t2linux-audio/          # 已安装哪些机型的数据
+```
+
+### 软件
+
+| 组件 | 最低版本 | 作用 |
+|---|---|---|
+| t2linux 内核 | — | 提供 `t2bce_audio` 驱动栈。发行版原版内核**完全驱动不了 T2 音频** |
+| `wireplumber` | ≥ 0.5.1 | 会话管理器 |
+| `pipewire` | ≥ 1.0 | 需含 `libpipewire-module-filter-chain` |
+| `pipewire-module-filter-chain-lv2` | — | DSP 图使用的 LV2 后端 |
+| `lsp-plugins-lv2` | ≥ 1.2.13 | 压缩器、响度补偿 |
+| `lv2-bankstown` | ≥ 1.1.0 | 虚拟低音 |
+| `lv2-triforce` | ≥ 0.2.0 | — |
+| `lv2-swh-plugins` | — | — |
+| `t2linux-audio` | ≥ 2.1.0 | **提供 FIR 数据与 `graph.json`** |
+
+上述插件都是 `t2linux-audio` 的依赖，所以通常装上它一个就够了。核对：
+
+```bash
+rpm -q --requires t2linux-audio
+```
+
+`install.sh` 在动手前会检查这些，缺什么会直接告诉你。
+
+### 实测环境
+
+**只在一台机器上验证过** —— 本仓库的所有结论都来自它：
+
+```
+机型          MacBookPro15,4   (13 英寸 2019, i5-8257U)
+发行版        Fedora Linux 44 (Workstation Edition)
+内核          7.1.9-200.t2.fc44.x86_64
+PipeWire      1.6.8
+WirePlumber   0.5.14
+t2linux-audio 2.1.0-1.20260831git3cd0333.fc44
+```
+
+**其余九个支持机型均未实测。** `t2linux-audio` 提供了它们的数据、图格式
+完全一致，理论上同样可用，**但请当作未验证对待**。
+
+**其他发行版同样未实测。** 本项目没有 Fedora 特有的东西（只写
+`~/.config/pipewire/`），但包名会有差异，且 [NOTES.zh-CN.md](NOTES.zh-CN.md)
+里记录的那些打包缺陷是 Fedora 的——别的发行版有没有，需要自行确认。
+
 ## 安装
 
 ```bash
@@ -156,8 +210,6 @@ t2-mac-dsp/
 └── tools/
     └── gen-conf.py        从官方 graph.json 生成配置
 ```
-
-> 脚本的提示信息与注释保持英文，方便国际用户；文档提供中英双语。
 
 ## 关于数据
 

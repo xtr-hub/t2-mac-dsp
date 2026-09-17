@@ -53,6 +53,63 @@ Models with DSP data in `/usr/share/t2linux-audio/<dir>/`:
 
 Check yours: `cat /sys/class/dmi/id/product_name`
 
+## Requirements
+
+### Hardware
+
+An Apple T2 MacBook (2018–2020 Intel models with the T2 security chip) whose
+model appears in the table above. Verify with:
+
+```bash
+cat /sys/class/dmi/id/product_name    # e.g. MacBookPro15,4
+ls /usr/share/t2linux-audio/          # which model dirs are installed
+```
+
+### Software
+
+| Component | Minimum | Why |
+|---|---|---|
+| t2linux kernel | — | The `t2bce_audio` driver stack. A stock distribution kernel does not drive T2 audio at all. |
+| `wireplumber` | ≥ 0.5.1 | Session manager |
+| `pipewire` | ≥ 1.0 | Must include `libpipewire-module-filter-chain` |
+| `pipewire-module-filter-chain-lv2` | — | LV2 backend used by the DSP graph |
+| `lsp-plugins-lv2` | ≥ 1.2.13 | Compressors, loudness compensation |
+| `lv2-bankstown` | ≥ 1.1.0 | Virtual bass |
+| `lv2-triforce` | ≥ 0.2.0 | — |
+| `lv2-swh-plugins` | — | — |
+| `t2linux-audio` | ≥ 2.1.0 | **Ships the FIR data and `graph.json`** |
+
+All of the plugin packages come in as dependencies of `t2linux-audio`, so
+installing that one package is normally enough. Verify:
+
+```bash
+rpm -q --requires t2linux-audio
+```
+
+`install.sh` checks these before doing anything and tells you what is missing.
+
+### Tested on
+
+**Exactly one configuration** — every claim in this repository comes from it:
+
+```
+Machine      MacBookPro15,4   (13" 2019, i5-8257U)
+Distro       Fedora Linux 44 (Workstation Edition)
+Kernel       7.1.9-200.t2.fc44.x86_64
+PipeWire     1.6.8
+WirePlumber  0.5.14
+t2linux-audio 2.1.0-1.20260831git3cd0333.fc44
+```
+
+**The other nine supported models are untested here.** `t2linux-audio` ships
+their data and the graph format is identical, so the approach should carry
+over — but treat it as unverified.
+
+**Other distributions are untested too.** Nothing in this repo is
+Fedora-specific (it only writes under `~/.config/pipewire/`), but package
+names differ and the packaging bugs documented in [NOTES.md](NOTES.md) are
+Fedora's — they may or may not exist elsewhere.
+
 ## Install
 
 ```bash
