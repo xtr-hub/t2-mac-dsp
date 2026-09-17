@@ -91,7 +91,26 @@ response, and the limiter stages still protect the drivers.
 | 4.0 | +12.7 dB | still too quiet |
 | 5.0 | +14.7 dB | near the limit; dynamics get flattened |
 
-Change it via `./install.sh 4.0`, or edit `gain` in the config and restart:
+### Volume curve
+
+The stock config also has a very steep `cubic` volume mapping:
+
+| Sink volume | Internal gain |
+|---|---|
+| 100% | 0 dB |
+| 75% | **−25 dB** |
+| 50% | **−37 dB** |
+
+Anything below full scale therefore sounds broken. `gen-conf.py` replaces it
+with `linear` (same endpoints, far gentler in between) and raises
+`state.default-volume` from 0.75 to 1.0, so a fresh install starts at full volume.
+
+Note that WirePlumber **persists** the volume in
+`~/.local/state/wireplumber/`. If you spend a while poking at `wpctl set-volume`,
+the runtime value can end up somewhere odd — a restart resets it to the
+configured default.
+
+Change the gain via `./install.sh 4.0`, or edit `gain` in the config and restart:
 
 ```bash
 systemctl --user restart pipewire pipewire-pulse wireplumber

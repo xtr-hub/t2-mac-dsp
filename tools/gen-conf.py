@@ -89,6 +89,20 @@ def build(model, gain):
     playback.pop("target.object", None)
     playback.pop("node.dont-fallback", None)
 
+    # Start at full volume. The stock default is 0.75, and with the steep
+    # cubic volume curve below that maps to roughly -25 dB internally, which
+    # sounds distinctly quiet until you push the slider to 100%.
+    capture = dict(d["capture.props"])
+    capture["state.default-volume"] = 1.0
+
+    # Flatten the volume curve. The stock "cubic" mapping is very steep:
+    #   100% -> 0 dB, 75% -> -25 dB, 50% -> -37 dB
+    # which makes everything below full scale sound broken. "linear" keeps the
+    # same endpoints but is far less punishing in between.
+    for v in d["filter.graph"].get("capture.volumes", []):
+        if v.get("scale") == "cubic":
+            v["scale"] = "linear"
+
     # Gain compensation on the convolvers
     for n in d["filter.graph"]["nodes"]:
         if n.get("label") == "convolver" and "config" in n:
@@ -118,7 +132,7 @@ context.modules = [
         node.description = {spa(d['node.description'])}
         media.name = {spa(d['media.name'])}
         filter.graph = {spa(d['filter.graph'], 2)}
-        capture.props = {spa(d['capture.props'], 2)}
+        capture.props = {spa(capture, 2)}
         playback.props = {spa(playback, 2)}
     }}
 }}
