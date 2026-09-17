@@ -125,10 +125,17 @@ t2-mac-dsp/
     └── gen-conf.py        从官方 graph.json 生成配置
 ```
 
+## 关于数据
+
+**本仓库不含任何音频数据。** FIR 滤波器文件和 DSP 图定义在运行时从系统包
+`t2linux-audio` 读取，本项目只提供把它们接进 PipeWire 的胶水代码。
+
+因此本项目用 MIT 许可，不涉及上游数据的再分发。那些数据源自 Asahi Linux
+项目与 T2 Linux 团队，版权见系统上的
+`/usr/share/t2linux-audio/*/LICENSE.asahi-audio`。
+
 ## 致谢
 
 - **Asahi Linux** 团队 —— 扬声器频响测量与 FIR 生成
 - **T2 Linux 团队** —— `t2linux-audio` 包与 DSP 图定义
 - `chadmed` (bankstown)、`lsp-plugins` —— 用到的 LV2 插件
-
-数据版权见 `/usr/share/t2linux-audio/*/LICENSE.asahi-audio`。

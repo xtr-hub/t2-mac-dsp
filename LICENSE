@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 t2-mac-dsp contributors
+Copyright (c) 2026 xtr-hub
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-NOTE ON BUNDLED DATA
-
-This repository contains NO audio data. The FIR filter files and DSP graph
-definitions are read at runtime from the system package `t2linux-audio`,
-which is not redistributed here.
-
-Those data originate from the Asahi Linux project and the T2 Linux team;
-see /usr/share/t2linux-audio/*/LICENSE.asahi-audio on an installed system.
