@@ -48,8 +48,11 @@ Models with DSP data in `/usr/share/t2linux-audio/<dir>/`:
 | Directory | Model |
 |---|---|
 | `8_1` `8_2` `9_1` | MacBookAir8,1 / 8,2 / 9,1 |
-| `15_1` `15_2` `15_4` | MacBookPro15,1 / 15,2 / 15,4 |
+| `15_1` `15_4` | MacBookPro15,1 / 15,4 |
 | `16_1` `16_2` `16_3` `16_4` | MacBookPro16,1 / 16,2 / 16,3 / 16,4 |
+
+(2.1.0 also shipped `15_2`; 2.2.0 dropped it. `install.sh` still lists it as
+supported so that it keeps working with the older package.)
 
 Check yours: `cat /sys/class/dmi/id/product_name`
 
@@ -88,7 +91,7 @@ rpm -q --requires t2linux-audio
 `install.sh` checks the ones that are actually referenced by the DSP graphs
 and tells you what is missing, with the install command for your package
 manager. (Note `lv2-swh-plugins` is listed as a dependency upstream but is not
-referenced by any of the ten models' graphs, so it is not checked.)
+referenced by any of the models' graphs, so it is not checked.)
 
 ### Tested on
 
@@ -100,10 +103,10 @@ Distro       Fedora Linux 44 (Workstation Edition)
 Kernel       7.1.9-200.t2.fc44.x86_64
 PipeWire     1.6.8
 WirePlumber  0.5.14
-t2linux-audio 2.1.0-1.20260831git3cd0333.fc44
+t2linux-audio 2.2.0-1.20260917git9527bff.fc44
 ```
 
-**The other nine supported models are untested here.** `t2linux-audio` ships
+**The other eight supported models are untested here.** `t2linux-audio` ships
 their data and the graph format is identical, so the approach should carry
 over — but treat it as unverified.
 
@@ -115,8 +118,8 @@ Fedora's — they may or may not exist elsewhere.
 ## Install
 
 ```bash
-./install.sh              # default convolver gain 3.0
-./install.sh 4.0          # louder
+./install.sh              # default convolver gain 1.0 (unity)
+./install.sh 4.0          # louder, at the cost of headroom — see Volume
 ```
 
 **Entirely user-level — no root required.** Writes only under `~/.config/pipewire/`.
@@ -134,52 +137,78 @@ Removes the config, restarts the audio stack, returns to pass-through.
 
 ## Volume
 
-**FIR correction is mostly peak-cutting, and the removed energy does not come
-back — so overall level is necessarily lower than pass-through.** The official
-`graph.json` uses `gain = 0.92` and applies no compensation, so the stock
-result is quiet.
+`install.sh` uses a convolver gain of **1.0** — unity, which is what upstream's
+`0.92` amounts to in practice.
 
-`install.sh` defaults to a convolver gain of **4.0** (≈ +12.7 dB) to compensate.
-This is a fixed gain: it scales the signal without altering the frequency
-response, and the limiter stages still protect the drivers.
+An earlier version of this project defaulted to **4.0** (+12.0 dB), on the theory
+that FIR correction is peak-cutting and the lost level needs making up.
+**Measuring the filters shows that theory was wrong.** The two FIRs are a
+crossover, not two copies of one calibration:
 
-| Gain | Approx. | When |
-|---|---|---|
-| 2.0 | +6.7 dB | too loud |
-| 3.0 | +10.3 dB | conservative |
-| **4.0** | **+12.7 dB** | **default** |
-| 5.0 | +14.7 dB | near the limit; dynamics get flattened |
+| Filter | 200 Hz | 400 Hz | 3 kHz | 10 kHz |
+|---|---|---|---|---|
+| `front-*.wav` (woofer) | +0.1 | +2.3 | −14.6 | −41.3 |
+| `rear-*.wav` (full band) | −0.7 | +1.8 | −4.0 | −7.6 |
 
-> ⚠️ **This deviates from upstream.** The official `graph.json` uses
-> `gain = 0.92`, which is 12.7 dB below this project's default. The extra gain
-> makes up for the level lost to peak-cutting FIR correction, at the cost of
-> the limiter engaging earlier and dynamics being compressed. Sustained loud
-> playback puts more stress on the drivers.
+Each is ~0 dB in the band its own driver reproduces. `front-48.wav` does measure
+an L2 norm of −13.4 dB, but that is the low-pass rejecting HF — not attenuation
+in the woofer's band. There is no broadband level to make up, so unity is right.
+
+**If you do raise the gain, know what it costs.** The gain applies to all four
+convolvers equally — giving the two pairs different gains would break the
+crossover balance by ~12 dB — and the volume curve tops out at 0 dB, so the
+signal reaches the output `gain` dB over full scale at full volume:
+
+| Gain | Rear path reaches 0 dBFS above |
+|---|---|
+| **1.0** | **only at 100% — the whole range below that is clean** |
+| 2.0 (+6.0 dB) | ~86% volume |
+| 4.0 (+12.0 dB) | ~72% volume |
+| 5.0 (+14.0 dB) | ~67% volume |
+
+Past that point the rear path rides the limiter. The output stays bounded, but
+dynamics collapse and sustained loud playback puts more stress on those drivers.
+Keeping the gain at 1.0 and using the volume slider gives the same loudness with
+the entire range usable.
 
 ### Volume curve
 
-The stock config maps volume into the DSP with a very steep `cubic` curve,
-so anything below half scale is effectively silent. `gen-conf.py` switches it
-to `linear` and pulls the floor from −42.5 dB up to −36 dB, which tracks the
-**standard audio taper** (PipeWire/PulseAudio's `cubic`, i.e. amplitude =
-volume³, giving −18 dB at 50%):
+`capture.volumes` hands the sink's volume over to the DSP's loudness
+compensator instead of applying it in software:
 
-| Slider | Standard taper | This project | Delta |
-|---|---|---|---|
-| 100% | 0 dB | 0 dB | — |
-| 75% | −7.5 dB | −9.0 dB | −1.5 |
-| **50%** | **−18.1 dB** | **−18.0 dB** | **+0.1** |
-| 25% | −36.1 dB | −27.0 dB | +9.1 |
+```
+value = min + (max - min) * f(v)     f(v) = v (linear) | cbrt(v) (cubic)
+```
 
-**From 50% upward it matches almost exactly.** Below ~25% it runs a little
-louder than the standard taper — an inherent limitation, since
-`capture.volumes` only offers `linear`/`cubic` scaling and cannot reproduce
-the taper exactly.
+The value written is a **dB** gain, and `v` is *not* the slider position — it is
+the linear amplitude from `SPA_PROP_channelVolumes`. Since PipeWire's standard
+taper is exactly amplitude = slider³, `cbrt(v)` recovers the slider, and the
+shipped `cubic` + `min = −42.5` evaluates to `dB = −42.5·(1 − slider)` — a sane
+curve close to the standard taper (60·log₁₀(slider)):
+
+| Slider | Standard taper | Shipped curve |
+|---|---|---|
+| 100% | 0 dB | 0 dB |
+| 75% | −7.5 dB | −10.6 dB |
+| **50%** | **−18.1 dB** | **−21.3 dB** |
+| 25% | −36.1 dB | −31.9 dB |
+| 10% | −60.0 dB | −38.3 dB |
+
+**This project passes it through unchanged.** Switching to `scale = "linear"`
+looks like the obvious fix and is not — it feeds the raw amplitude into the
+range directly, giving `dB = −36 + 36·slider³`: roughly 10 dB quieter at the
+halfway point, and nearly flat below 25%. That was tried here and reverted. If
+the speakers ever sound ~10 dB quieter for no reason, check `scale` under
+`capture.volumes` in the generated config.
+
+Slider 0 is true silence either way: the module applies an additional hard 0/1
+soft volume when the slider hits zero.
 
 Note that WirePlumber **persists** the volume in
-`~/.local/state/wireplumber/`. If you spend a while poking at `wpctl set-volume`,
-the runtime value can end up somewhere odd — a restart resets it to the
-configured default (`state.default-volume`, set to 1.0 here).
+`~/.local/state/wireplumber/`, so it survives service restarts;
+`state.default-volume` only applies when there is no persisted state, so it is
+not a reliable starting volume. Use `wpctl set-volume <id> <value>` and, if you
+want a ceiling, `wpctl set-volume <id> <value> --limit <max>`.
 
 Change the gain via `./install.sh 4.0`, or edit `gain` in the config and restart:
 
@@ -197,8 +226,8 @@ All four drivers are working.
 
 **Do the volume keys still work?**
 
-Yes. The curve has been adjusted to track the standard audio taper — see
-"Volume curve" above.
+Yes. The volume curve is left as upstream ships it, which already tracks the
+standard audio taper — see "Volume curve" above.
 
 **How is this different from EasyEffects?**
 

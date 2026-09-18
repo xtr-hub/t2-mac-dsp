@@ -135,39 +135,59 @@ alsa_output.pci-...HiFi__Speaker__sink.split          Stream/.../Internal       
 **不要把 `hw_` 节点改名**——UCM loopback 的 `.split` 流 `target.object`
 硬编码指向它，改名会打断 UCM 链路。
 
-**`capture.volumes` 要小心对待。** 它把音量控制接力给 DSP 内部的响度补偿器，
-即把滑块位置映射到一段 `[min, max]` dB 区间。三点是踩出来的：
-
-*官方曲线很陡。* 原配 `min = -42.5, scale = "cubic"` 时：
+**`capture.volumes` 要小心对待，而且官方给的值本来就是对的。** 它把音量控制
+接力给 DSP 内部的响度补偿器，映射到一段 `[min, max]` dB 区间：
 
 ```
-sink 音量 100% -> 内部   0 dB
-sink 音量  75% -> 内部 -25 dB
-sink 音量  50% -> 内部 -37 dB
+value = min + (max - min) * f(v)     f(v) = v (linear) | cbrt(v) (cubic)
 ```
 
-滑块一半的行程听不出变化。
+（见 `spa/plugins/filter-graph/filter-graph.c` 的 `sync_volume()`）。
+
+*`v` 是幅度，不是滑块位置。* 这是踩掉一整个调试下午的坑。
+`impl_set_props()` 把 `SPA_PROP_channelVolumes` 原样拷进 `vol->volumes[]`，
+而按 PipeWire 的标准 taper，那是**线性幅度**（幅度 = 滑块³）。本机实测：
+
+```
+wpctl 0.25 -> channelVolumes 0.015625      (0.25³)
+wpctl 0.50 -> channelVolumes 0.125         (0.50³)
+wpctl 0.75 -> channelVolumes 0.421875      (0.75³)
+```
+
+所以 `scale = "cubic"` 里的 `cbrt(v)` 恰好把滑块位置还原出来，官方
+`min = -42.5` 等价于
+
+```
+dB = -42.5 * (1 - 滑块)
+```
+
+——一条很正常的曲线，相当接近标准 taper（60·log₁₀(滑块)）：
+
+```
+滑块     标准曲线     官方 cubic/-42.5     linear/-36（错）
+ 100%        0 dB              0 dB            0 dB
+  75%     -7.5 dB          -10.6 dB        -20.8 dB
+  50%    -18.1 dB          -21.3 dB        -31.5 dB
+  25%    -36.1 dB          -31.9 dB        -35.4 dB
+  10%    -60.0 dB          -38.3 dB        -36.0 dB
+```
+
+*千万别把 `cubic` "修"成 `linear`。* 看着像显然的改进，实际正好相反：
+`linear` 把原始幅度直接代进区间，得到 `dB = min + (max - min)*滑块³`。
+取 `min = -36` 时，滑块一半处就低约 10 dB，25% 以下几乎持平——安静到像是
+扬声器坏了。**本项目试过，已回退。**
 
 *绝对不要设 `min = 0`。* 那会让映射区间塌缩成 `[0, 0]`，音量锁死在最大值
 且无法调节——滑块还在动，但什么都不会变。
 
-*要贴合标准曲线，得用 `linear` + `min = -36`。* PipeWire/PulseAudio 用的是
-amplitude = volume³（见 `/usr/share/pipewire/client.conf` 里的
-`alsa.volume-method = cubic`），即 50% 对应 −18 dB。`capture.volumes` 只支持
-`linear`/`cubic` 两种 scale 作用在 dB 区间上，无法精确复现，但
-`linear` + `min = -36` 从 50% 往上贴得很近：
-
-```
-滑块     标准曲线       linear, min=-36
- 100%        0 dB           0 dB
-  75%     -7.5 dB        -9.0 dB
-  50%    -18.1 dB       -18.0 dB    <- 吻合
-  25%    -36.1 dB       -27.0 dB    <- 低区偏响
-```
+无论怎么配，滑块归零都是真静音：`impl_set_props()` 在滑块为 0 时会额外施加
+一个 0/1 的软音量。
 
 另外：**WirePlumber 会持久化运行时音量**（存在 `~/.local/state/wireplumber/`）。
-调试期间用 `wpctl set-volume` 设过的值，重启服务也不会丢——**完整重启**才会
-回到配置里的 `state.default-volume`。
+调试期间用 `wpctl set-volume` 设过的值，重启服务也不会丢——实测：设成 0.62 后
+重启 `pipewire`/`pipewire-pulse`/`wireplumber`，回来的仍是 0.62，而不是配置里的
+`state.default-volume`。**那个属性只在没有持久化状态时生效**，所以不能靠它来定
+开机音量。要限制上限用 `wpctl set-volume <id> <值> --limit <上限>`。
 
 **`target.object` 反而是绊脚石**：PipeWire 的 filter-chain 在模块加载瞬间
 匹配不到目标就放弃（`defined target not found`），而那时目标节点可能还没建好。

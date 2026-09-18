@@ -148,42 +148,65 @@ alsa_output.pci-...HiFi__Speaker__sink.split    Stream/.../Internal       ← it
 **Do not rename the `hw_` node** — the UCM loopback's `.split` stream has a
 hard-coded `target.object` pointing at it; renaming it breaks the UCM link.
 
-**`capture.volumes` needs care.** It hands volume control off to the DSP's
-loudness compensator, mapping slider position onto a `[min, max]` dB range.
-Three things learned the hard way:
-
-*The stock curve is steep.* With the shipped `min = -42.5, scale = "cubic"`:
+**`capture.volumes` needs care, and the shipped settings are already right.**
+It hands volume control off to the DSP's loudness compensator, mapping the
+sink volume onto a `[min, max]` dB range:
 
 ```
-sink volume 100% -> internal   0 dB
-sink volume  75% -> internal -25 dB
-sink volume  50% -> internal -37 dB
+value = min + (max - min) * f(v)     f(v) = v (linear) | cbrt(v) (cubic)
 ```
 
-Half the slider does nothing audible.
+(see `sync_volume()` in `spa/plugins/filter-graph/filter-graph.c`).
+
+*`v` is the amplitude, not the slider.* This is the trap that cost a debugging
+session. `impl_set_props()` copies `SPA_PROP_channelVolumes` straight into
+`vol->volumes[]`, and those are **linear amplitudes** under PipeWire's standard
+taper (amplitude = slider³). Verified on this machine:
+
+```
+wpctl 0.25 -> channelVolumes 0.015625      (0.25³)
+wpctl 0.50 -> channelVolumes 0.125         (0.50³)
+wpctl 0.75 -> channelVolumes 0.421875      (0.75³)
+```
+
+So with `scale = "cubic"`, `cbrt(v)` recovers the slider position, and the
+shipped `min = -42.5` is simply
+
+```
+dB = -42.5 * (1 - slider)
+```
+
+— a normal curve, close to the standard taper (60·log₁₀(slider)):
+
+```
+slider   standard taper   shipped cubic/-42.5   linear/-36 (WRONG)
+ 100%          0 dB                  0 dB                0 dB
+  75%       -7.5 dB              -10.6 dB            -20.8 dB
+  50%      -18.1 dB              -21.3 dB            -31.5 dB
+  25%      -36.1 dB              -31.9 dB            -35.4 dB
+  10%      -60.0 dB              -38.3 dB            -36.0 dB
+```
+
+*Do NOT "fix" `cubic` into `linear`.* It reads like the obvious improvement and
+is the opposite: `linear` throws the raw amplitude into the range, giving
+`dB = min + (max - min)*slider³`. With `min = -36` that is ~10 dB quieter at the
+halfway point and nearly flat below 25% — quiet enough to look like the speakers
+have died. Tried here, reverted.
 
 *Never set `min = 0`.* It collapses the mapping range to `[0, 0]`, which pins
 the volume at maximum and makes it unadjustable — the slider still moves but
 nothing changes.
 
-*Matching the standard taper needs `linear` + `min = -36`.* PipeWire/PulseAudio
-use amplitude = volume³ (see `alsa.volume-method = cubic` in
-`/usr/share/pipewire/client.conf`), i.e. −18 dB at 50%. `capture.volumes` only
-offers `linear`/`cubic` scaling over a dB range, so it cannot reproduce that
-exactly — but a linear mapping with `min = -36` tracks it closely from 50% up:
-
-```
-slider   standard taper   linear, min=-36
- 100%          0 dB           0 dB
-  75%       -7.5 dB        -9.0 dB
-  50%      -18.1 dB       -18.0 dB    <- matches
-  25%      -36.1 dB       -27.0 dB    <- low end runs louder
-```
+Slider 0 is true silence regardless: `impl_set_props()` applies a hard 0/1 soft
+volume when the slider hits zero.
 
 Also relevant: **WirePlumber persists the runtime volume** under
 `~/.local/state/wireplumber/`. While tuning, `wpctl set-volume` leaves values
-behind that survive a service restart — a full restart resets to
-`state.default-volume` from the config.
+behind that survive a service restart — verified: setting 0.62 and restarting
+`pipewire`/`pipewire-pulse`/`wireplumber` brings back 0.62, not the
+`state.default-volume` from the config. That property only applies when there
+is no persisted state, so it is not a reliable way to choose a starting volume.
+Use `wpctl set-volume` (and `wpctl set-volume … --limit` to cap it).
 
 **`target.object` is counterproductive.** PipeWire's filter-chain gives up if
 the target cannot be matched at module load time (`defined target not found`),
